@@ -1,0 +1,413 @@
+
+
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Ultimate Sports League</title>
+
+<style>
+
+*{box-sizing:border-box}
+
+body{margin:0;background:#0b1220;color:#fff;font-family:Arial,sans-serif}
+
+header{background:#16243b;padding:24px 15px;text-align:center}
+
+h1{color:#facc15;margin:0;font-size:27px}
+
+p{line-height:1.5}
+
+main{max-width:950px;margin:auto;padding:15px}
+
+.card{background:#19283f;border-radius:14px;padding:18px;margin:15px 0}
+
+h2{color:#facc15;font-size:20px}
+
+nav{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:18px}
+
+nav a{color:#fff;background:#30415c;padding:10px;border-radius:8px;text-decoration:none}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+
+th,td{padding:11px 5px;text-align:left;border-bottom:1px solid #35455c}
+
+th{color:#aab9ce}
+
+button{background:#facc15;border:0;border-radius:8px;padding:12px;font-weight:bold;cursor:pointer}
+
+input,select{width:100%;padding:12px;margin:7px 0 12px;border-radius:8px;border:1px solid #526078;background:#0b1220;color:white}
+
+.status{color:#aab9ce;font-size:13px}
+
+.error{color:#fca5a5}
+
+.tablewrap{overflow-x:auto}
+
+</style>
+
+</head>
+
+<body>
+
+<header>
+
+<h1>🏆 ULTIMATE SPORTS LEAGUE</h1>
+
+<p>The Ultimate Multi-Sport Competition</p>
+
+<nav>
+
+<a href="#standings">Standings</a>
+
+<a href="#rosters">Teams</a>
+
+<a href="#events">Scores</a>
+
+<a href="#commissioner">Commissioner</a>
+
+</nav>
+
+</header>
+
+<main>
+
+<section class="card" id="standings">
+
+<h2>🏆 League Standings</h2>
+
+<div id="standingsContent">Loading standings...</div>
+
+</section>
+
+<section class="card" id="rosters">
+
+<h2>🏈 Owner Team Selections</h2>
+
+<div id="rostersContent">Loading teams...</div>
+
+</section>
+
+<section class="card" id="events">
+
+<h2>📊 Recent Scoring Events</h2>
+
+<div id="eventsContent">Loading scores...</div>
+
+</section>
+
+<section class="card" id="commissioner">
+
+<h2>🔐 Commissioner Login</h2>
+
+<input id="email" type="email" placeholder="Commissioner email">
+
+<input id="password" type="password" placeholder="Password">
+
+<button onclick="login()">Sign In</button>
+
+<button onclick="logout()">Sign Out</button>
+
+<p id="loginStatus" class="status"></p>
+
+<div id="adminPanel" hidden>
+
+<h2>Add Scoring Event</h2>
+
+<label>Owner</label>
+
+<select id="ownerSelect"></select>
+
+<label>Sport</label>
+
+<input id="sport" placeholder="Example: NFL">
+
+<label>Selection</label>
+
+<input id="selection" placeholder="Example: Chiefs">
+
+<label>Points</label>
+
+<input id="points" type="number" step="any" placeholder="10">
+
+<button onclick="addScore()">Submit Score</button>
+
+<p id="scoreStatus" class="status"></p>
+
+</div>
+
+</section>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<script>
+
+const SUPABASE_URL="PASTE_YOUR_SUPABASE_URL_HERE";
+
+const SUPABASE_KEY="PASTE_YOUR_PUBLISHABLE_KEY_HERE";
+
+let db=null,owners=[],eventsCache=[];
+
+function safe(v){
+
+return String(v??"").replace(/[&<>"']/g,c=>({
+
+"&":"&amp;","<":"&lt;",">":"&gt;",
+
+'"':"&quot;","'":"&#39;"
+
+}[c]));
+
+}
+
+function setText(id,value){
+
+document.getElementById(id).textContent=value;
+
+}
+
+function showTable(id,headers,rows){
+
+const el=document.getElementById(id);
+
+if(!rows.length){
+
+el.textContent="No data available yet.";
+
+return;
+
+}
+
+el.innerHTML='<div class="tablewrap"><table><thead><tr>'+
+
+headers.map(h=>"<th>"+safe(h)+"</th>").join("")+
+
+"</tr></thead><tbody>"+
+
+rows.map(row=>"<tr>"+row.map(v=>"<td>"+safe(v)+"</td>").join("")+"</tr>").join("")+
+
+"</tbody></table></div>";
+
+}
+
+async function initialize(){
+
+if(SUPABASE_URL.includes("PASTE_")||SUPABASE_KEY.includes("PASTE_")){
+
+["standingsContent","rostersContent","eventsContent"].forEach(id=>
+
+setText(id,"Connect Supabase to load league data."));
+
+setText("loginStatus","Add your Supabase URL and publishable key to the code.");
+
+return;
+
+}
+
+if(!window.supabase){
+
+setText("loginStatus","Unable to load Supabase.");
+
+return;
+
+}
+
+db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+
+await loadData();
+
+await checkAdmin();
+
+db.auth.onAuthStateChange(()=>{
+
+setTimeout(checkAdmin,0);
+
+});
+
+}
+
+async function loadData(){
+
+try{
+
+const [o,r,e]=await Promise.all([
+
+db.from("owners").select("*"),
+
+db.from("roster").select("*"),
+
+db.from("scoring_events").select("*").order("id",{ascending:false}).limit(1000)
+
+]);
+
+if(o.error)throw o.error;
+
+if(r.error)throw r.error;
+
+if(e.error)throw e.error;
+
+owners=o.data||[];
+
+const rosters=r.data||[];
+
+eventsCache=e.data||[];
+
+const totals={};
+
+owners.forEach(x=>totals[x.id]=0);
+
+eventsCache.forEach(x=>{
+
+totals[x.owner_id]=(totals[x.owner_id]||0)+Number(x.points||0);
+
+});
+
+const ranked=[...owners].sort((a,b)=>(totals[b.id]||0)-(totals[a.id]||0));
+
+showTable("standingsContent",["Rank","Owner","Points"],
+
+ranked.map((x,i)=>[i+1,x.name,totals[x.id]||0]));
+
+showTable("rostersContent",["Owner","Sport","Selection"],
+
+rosters.map(x=>[
+
+owners.find(o=>o.id===x.owner)?.name||x.owner,
+
+x.sport,x.selection
+
+]));
+
+showTable("eventsContent",["Owner","Sport","Selection","Points"],
+
+eventsCache.slice(0,30).map(x=>[
+
+owners.find(o=>o.id===x.owner_id)?.name||x.owner_id,
+
+x.sport,x.selection,x.points??0
+
+]));
+
+const select=document.getElementById("ownerSelect");
+
+select.innerHTML=owners.map(x=>
+
+'<option value="'+safe(x.id)+'">'+safe(x.name)+'</option>'
+
+).join("");
+
+}catch(err){
+
+["standingsContent","rostersContent","eventsContent"].forEach(id=>
+
+setText(id,"Database error: "+err.message));
+
+}
+
+}
+
+async function checkAdmin(){
+
+if(!db)return;
+
+const {data:{user}}=await db.auth.getUser();
+
+let authorized=false;
+
+if(user){
+
+const {data,error}=await db.from("commissioners")
+
+.select("user_id").eq("user_id",user.id).maybeSingle();
+
+authorized=!error&&!!data;
+
+}
+
+document.getElementById("adminPanel").hidden=!authorized;
+
+setText("loginStatus",authorized?"Commissioner access granted.":user?"Signed in, but commissioner access is not assigned.":"Not signed in.");
+
+}
+
+async function login(){
+
+if(!db)return;
+
+const email=document.getElementById("email").value.trim();
+
+const password=document.getElementById("password").value;
+
+const {error}=await db.auth.signInWithPassword({email,password});
+
+if(error)setText("loginStatus",error.message);
+
+else await checkAdmin();
+
+}
+
+async function logout(){
+
+if(!db)return;
+
+await db.auth.signOut();
+
+await checkAdmin();
+
+}
+
+async function addScore(){
+
+if(!db)return;
+
+const owner_id=document.getElementById("ownerSelect").value;
+
+const sport=document.getElementById("sport").value.trim();
+
+const selection=document.getElementById("selection").value.trim();
+
+const points=Number(document.getElementById("points").value);
+
+if(!owner_id||!sport||!selection||!Number.isFinite(points)){
+
+setText("scoreStatus","Complete all fields.");
+
+return;
+
+}
+
+const {error}=await db.from("scoring_events").insert({
+
+owner_id,sport,selection,points
+
+});
+
+if(error){
+
+setText("scoreStatus",error.message);
+
+return;
+
+}
+
+setText("scoreStatus","Score submitted!");
+
+await loadData();
+
+}
+
+initialize();
+
+</script>
+
+</body>
+
+</html>
